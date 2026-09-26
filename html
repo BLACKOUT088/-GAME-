@@ -1,1 +1,568 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Splat Arena</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: rgba(15, 23, 42, 0.7);
+      --cyan: #67e8f9;
+      --green: #34d399;
+      --red: #f87171;
+      --gold: #fbbf24;
+      --white: #ffffff;
+    }
 
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--white);
+      font-family: Arial, sans-serif;
+    }
+
+    body {
+      position: relative;
+    }
+
+    #gameCanvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: radial-gradient(circle at top, #1e293b 0%, #020617 70%);
+    }
+
+    .ui {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .health {
+      position: absolute;
+      left: 24px;
+      top: 24px;
+      width: 300px;
+      height: 24px;
+      border-radius: 12px;
+      background: rgba(0,0,0,0.4);
+      border: 2px solid rgba(248,113,113,0.8);
+      overflow: hidden;
+      box-shadow: 0 0 18px rgba(248,113,113,0.25);
+    }
+
+    .health-fill {
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, #ef4444, #f87171);
+      transition: width 0.12s linear;
+    }
+
+    .score {
+      position: absolute;
+      right: 24px;
+      top: 24px;
+      padding: 10px 18px;
+      border-radius: 12px;
+      background: rgba(0,0,0,0.4);
+      border: 2px solid rgba(251,191,36,0.9);
+      font-size: 1.4rem;
+      font-weight: bold;
+      box-shadow: 0 0 18px rgba(251,191,36,0.2);
+    }
+
+    .ammo {
+      position: absolute;
+      right: 24px;
+      bottom: 24px;
+      padding: 12px 18px;
+      border-radius: 12px;
+      background: rgba(0,0,0,0.45);
+      border: 2px solid rgba(52,211,153,0.9);
+      font-size: 1.15rem;
+      font-weight: bold;
+      box-shadow: 0 0 18px rgba(52,211,153,0.2);
+    }
+
+    .controls {
+      position: absolute;
+      left: 24px;
+      bottom: 24px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(103,232,249,0.8);
+      font-size: 0.9rem;
+      line-height: 1.5;
+      color: #d1fae5;
+      box-shadow: 0 0 18px rgba(103,232,249,0.15);
+    }
+
+    .minimap-shell {
+      position: absolute;
+      left: 50%;
+      top: 16px;
+      transform: translateX(-50%);
+      width: 210px;
+      height: 210px;
+      padding: 8px;
+      border-radius: 16px;
+      background: rgba(15, 23, 42, 0.7);
+      border: 2px solid rgba(103,232,249,0.8);
+      box-shadow: 0 0 20px rgba(103,232,249,0.15);
+    }
+
+    #minimap {
+      width: 100%;
+      height: 100%;
+      display: block;
+      border-radius: 12px;
+      background: rgba(0,0,0,0.3);
+    }
+
+    .loading {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      padding: 20px 34px;
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.8);
+      border: 2px solid rgba(103,232,249,0.8);
+      font-size: 1.2rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      box-shadow: 0 0 18px rgba(103,232,249,0.25);
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+
+  <div class="ui">
+    <div class="health"><div id="healthFill" class="health-fill"></div></div>
+    <div class="score">Score: <span id="scoreValue">0</span></div>
+    <div class="ammo">Ammo: <span id="ammoValue">100</span></div>
+    <div class="controls">
+      <strong>Steuerung:</strong><br>
+      WASD bewegen<br>
+      Maus: Kamera<br>
+      Linksklick: Schießen<br>
+      R: Nachladen<br>
+      Space: Springen<br>
+      Shift: Sprint
+    </div>
+    <div class="minimap-shell"><canvas id="minimap"></canvas></div>
+    <div id="loading" class="loading">Lade Spiel...</div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"></script>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0f172a);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.rotation.order = 'YXZ';
+
+    const world = new CANNON.World();
+    world.gravity.set(0, -9.82, 0);
+    world.broadphase = new CANNON.NaiveBroadphase();
+
+    const keys = {};
+    const bullets = [];
+    const enemies = [];
+
+    let score = 0;
+    let gameStarted = false;
+
+    const healthFill = document.getElementById('healthFill');
+    const scoreValue = document.getElementById('scoreValue');
+    const ammoValue = document.getElementById('ammoValue');
+    const loading = document.getElementById('loading');
+    const minimapCtx = document.getElementById('minimap').getContext('2d');
+
+    class Player {
+      constructor() {
+        this.position = new THREE.Vector3(0, 1.5, 0);
+        this.velocity = new THREE.Vector3();
+        this.health = 100;
+        this.speed = 0.28;
+        this.sprintSpeed = 0.5;
+        this.jumpPower = 4.4;
+        this.grounded = true;
+        this.pitch = 0;
+        this.yaw = 0;
+
+        this.body = new CANNON.Body({
+          mass: 1,
+          shape: new CANNON.Cylinder(0.52, 0.52, 2.0, 12)
+        });
+        this.body.position.set(this.position.x, this.position.y, this.position.z);
+        world.addBody(this.body);
+
+        this.weapon = new Weapon(this);
+      }
+
+      update() {
+        let moveX = 0;
+        let moveZ = 0;
+
+        if (keys['w']) moveZ -= 1;
+        if (keys['s']) moveZ += 1;
+        if (keys['a']) moveX -= 1;
+        if (keys['d']) moveX += 1;
+
+        if (moveX !== 0 || moveZ !== 0) {
+          const dir = new THREE.Vector3(moveX, 0, moveZ).normalize();
+          dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
+          const currentSpeed = keys['shift'] ? this.sprintSpeed : this.speed;
+          this.velocity.x = dir.x * currentSpeed;
+          this.velocity.z = dir.z * currentSpeed;
+        } else {
+          this.velocity.x *= 0.8;
+          this.velocity.z *= 0.8;
+        }
+
+        if (keys[' '] && this.grounded) {
+          this.velocity.y = this.jumpPower;
+          this.grounded = false;
+        }
+
+        this.velocity.y -= 0.095;
+        this.position.x += this.velocity.x;
+        this.position.z += this.velocity.z;
+        this.position.y += this.velocity.y;
+
+        this.position.x = THREE.MathUtils.clamp(this.position.x, -48, 48);
+        this.position.z = THREE.MathUtils.clamp(this.position.z, -48, 48);
+
+        if (this.position.y <= 1.5) {
+          this.position.y = 1.5;
+          this.velocity.y = 0;
+          this.grounded = true;
+        }
+
+        this.body.position.set(this.position.x, this.position.y, this.position.z);
+        camera.position.set(this.position.x, this.position.y + 1.15, this.position.z);
+        camera.rotation.set(this.pitch, this.yaw, 0);
+
+        this.weapon.update();
+      }
+
+      takeDamage(amount) {
+        this.health = Math.max(0, this.health - amount);
+        healthFill.style.width = (this.health / 100) * 100 + '%';
+        if (this.health <= 0) {
+          this.health = 100;
+          this.position.set(0, 1.5, 0);
+          this.velocity.set(0, 0, 0);
+          healthFill.style.width = '100%';
+        }
+      }
+    }
+
+    class Weapon {
+      constructor(owner) {
+        this.owner = owner;
+        this.ammo = 100;
+        this.maxAmmo = 100;
+        this.cooldown = 0;
+        this.projectileSpeed = 1.2;
+      }
+
+      shoot() {
+        if (this.ammo <= 0 || this.cooldown > 0) return;
+        this.ammo--;
+        this.cooldown = 0.12;
+
+        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+
+        const bullet = new THREE.Mesh(
+          new THREE.SphereGeometry(0.12, 10, 10),
+          new THREE.MeshBasicMaterial({ color: 0x34d399 })
+        );
+
+        bullet.position.copy(camera.position);
+        bullet.velocity = dir.multiplyScalar(this.projectileSpeed);
+        bullet.life = 80;
+        scene.add(bullet);
+        bullets.push(bullet);
+
+        ammoValue.textContent = this.ammo;
+      }
+
+      reload() {
+        this.ammo = this.maxAmmo;
+        ammoValue.textContent = this.ammo;
+      }
+
+      update() {
+        this.cooldown = Math.max(0, this.cooldown - 0.016);
+      }
+    }
+
+    class Enemy {
+      constructor(x, z) {
+        this.position = new THREE.Vector3(x, 1.2, z);
+        this.mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(1.2, 1.2, 1.2),
+          new THREE.MeshPhongMaterial({ color: 0xf87171 })
+        );
+        this.mesh.position.copy(this.position);
+        this.mesh.castShadow = true;
+        this.mesh.receiveShadow = true;
+        scene.add(this.mesh);
+
+        this.health = 30;
+        this.alive = true;
+        this.attackCooldown = 0;
+      }
+
+      update(targetPos) {
+        if (!this.alive) return;
+        const dir = new THREE.Vector3().subVectors(targetPos, this.position);
+        const dist = dir.length();
+        if (dist > 0.0001) dir.normalize();
+
+        if (dist > 1.8) {
+          this.position.add(dir.multiplyScalar(0.08));
+        }
+
+        if (dist < 2.0 && this.attackCooldown <= 0) {
+          player.takeDamage(10);
+          this.attackCooldown = 1.5;
+        }
+
+        this.attackCooldown -= 0.016;
+        this.mesh.position.copy(this.position);
+      }
+
+      hit(amount) {
+        if (!this.alive) return;
+        this.health -= amount;
+        if (this.health <= 0) {
+          this.alive = false;
+          scene.remove(this.mesh);
+          score += 100;
+          scoreValue.textContent = score;
+          setTimeout(spawnEnemy, 300);
+        }
+      }
+    }
+
+    function createArena() {
+      const ambient = new THREE.AmbientLight(0xffffff, 0.7);
+      scene.add(ambient);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.1);
+      dirLight.position.set(20, 35, 10);
+      dirLight.castShadow = true;
+      dirLight.shadow.mapSize.width = 2048;
+      dirLight.shadow.mapSize.height = 2048;
+      dirLight.shadow.camera.left = -80;
+      dirLight.shadow.camera.right = 80;
+      dirLight.shadow.camera.top = 80;
+      dirLight.shadow.camera.bottom = -80;
+      scene.add(dirLight);
+
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(100, 100),
+        new THREE.MeshPhongMaterial({ color: 0x1f2937 })
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      const groundBody = new CANNON.Body({ mass: 0, shape: new CANNON.Plane() });
+      groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+      world.addBody(groundBody);
+
+      const walls = [
+        { x: 0, z: -50, w: 100, h: 10, d: 4 },
+        { x: 0, z: 50, w: 100, h: 10, d: 4 },
+        { x: -50, z: 0, w: 4, h: 10, d: 100 },
+        { x: 50, z: 0, w: 4, h: 10, d: 100 }
+      ];
+
+      walls.forEach((w) => {
+        const wall = new THREE.Mesh(
+          new THREE.BoxGeometry(w.w, w.h, w.d),
+          new THREE.MeshPhongMaterial({ color: 0x475569 })
+        );
+        wall.position.set(w.x, w.h / 2, w.z);
+        wall.castShadow = true;
+        wall.receiveShadow = true;
+        scene.add(wall);
+
+        const wallBody = new CANNON.Body({
+          mass: 0,
+          shape: new CANNON.Box(new CANNON.Vec3(w.w / 2, w.h / 2, w.d / 2))
+        });
+        wallBody.position.set(w.x, w.h / 2, w.z);
+        world.addBody(wallBody);
+      });
+
+      const platforms = [[-20, 5, -20], [20, 5, -20], [-20, 5, 20], [20, 5, 20], [0, 2.5, 0]];
+      platforms.forEach(([x, y, z]) => {
+        const p = new THREE.Mesh(
+          new THREE.BoxGeometry(10, 1, 10),
+          new THREE.MeshPhongMaterial({ color: 0x38bdf8 })
+        );
+        p.position.set(x, y, z);
+        p.castShadow = true;
+        p.receiveShadow = true;
+        scene.add(p);
+
+        const body = new CANNON.Body({
+          mass: 0,
+          shape: new CANNON.Box(new CANNON.Vec3(5, 0.5, 5))
+        });
+        body.position.set(x, y, z);
+        world.addBody(body);
+      });
+    }
+
+    function spawnEnemy() {
+      const spawns = [
+        [-28, -28], [28, -28], [-28, 28], [28, 28], [0, -32], [0, 32]
+      ];
+      const [x, z] = spawns[Math.floor(Math.random() * spawns.length)];
+      const enemy = new Enemy(x, z);
+      enemies.push(enemy);
+    }
+
+    function updateBullets() {
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const bullet = bullets[i];
+        bullet.position.add(bullet.velocity);
+        bullet.life--;
+
+        let removed = false;
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          const enemy = enemies[j];
+          if (!enemy.alive) continue;
+          if (bullet.position.distanceTo(enemy.position) < 1.1) {
+            enemy.hit(10);
+            scene.remove(bullet);
+            bullets.splice(i, 1);
+            removed = true;
+            break;
+          }
+        }
+
+        if (!removed && bullet.life <= 0) {
+          scene.remove(bullet);
+          bullets.splice(i, 1);
+        }
+      }
+    }
+
+    function drawMinimap() {
+      const mini = document.getElementById('minimap');
+      const ctx = mini.getContext('2d');
+      ctx.clearRect(0, 0, mini.width, mini.height);
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, mini.width, mini.height);
+
+      // Player
+      const px = ((player.position.x + 50) / 100) * mini.width;
+      const pz = ((player.position.z + 50) / 100) * mini.height;
+      ctx.fillStyle = '#34d399';
+      ctx.beginPath();
+      ctx.arc(px, pz, 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Enemies
+      ctx.fillStyle = '#f87171';
+      enemies.forEach((enemy) => {
+        if (!enemy.alive) return;
+        const ex = ((enemy.position.x + 50) / 100) * mini.width;
+        const ez = ((enemy.position.z + 50) / 100) * mini.height;
+        ctx.beginPath();
+        ctx.arc(ex, ez, 4, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function setupInput() {
+      window.addEventListener('keydown', (event) => {
+        const key = event.key.toLowerCase();
+        keys[key] = true;
+        if (key === 'r') player.weapon.reload();
+      });
+
+      window.addEventListener('keyup', (event) => {
+        keys[event.key.toLowerCase()] = false;
+      });
+
+      window.addEventListener('mousedown', (event) => {
+        if (event.button === 0) player.weapon.shoot();
+      });
+
+      window.addEventListener('mousemove', (event) => {
+        if (document.pointerLockElement !== document.body) return;
+        player.yaw -= event.movementX * 0.0025;
+        player.pitch -= event.movementY * 0.002;
+        player.pitch = THREE.MathUtils.clamp(player.pitch, -1.2, 1.2);
+      });
+
+      document.addEventListener('click', () => {
+        document.body.requestPointerLock?.();
+      });
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      if (gameStarted) {
+        player.update();
+        enemies.forEach((enemy) => enemy.update(player.position));
+        updateBullets();
+        drawMinimap();
+      }
+      renderer.render(scene, camera);
+    }
+
+    function resize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    window.addEventListener('resize', resize);
+
+    createArena();
+    const player = new Player();
+    setupInput();
+
+    const mini = document.getElementById('minimap');
+    mini.width = 200;
+    mini.height = 200;
+
+    for (let i = 0; i < 5; i++) spawnEnemy();
+
+    healthFill.style.width = '100%';
+    scoreValue.textContent = score;
+    ammoValue.textContent = player.weapon.ammo;
+
+    gameStarted = true;
+    loading.style.display = 'none';
+    animate();
+  </script>
+</body>
+</html>
